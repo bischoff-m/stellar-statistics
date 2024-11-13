@@ -1,0 +1,22 @@
+version = 1
+requires-python = ">=3.12"
+
+[[package]]
+name = "rawkit"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/a0/79e66ce71687b63529f04269182d2e672eb53509602fa2acffb2204a21b4/rawkit-0.6.0.tar.gz", hash = "sha256:da1c07b4099b26837f2a4fa01970702e8d127a20636a5f70f1c14470f2cd306f", size = 25143 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/a1/b99402cc6b1d7296163a0e3e3a37f132d62e7a9e1662ada4749e419edaf7/rawkit-0.6.0-py2.py3-none-any.whl", hash = "sha256:67441c3fbfdb90ca7da1e6c8b5bf694514ebf2fb1a39423a329769c6bc60a81d", size = 28310 },
+]
+
+[[package]]
+name = "stellar-statistics"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "rawkit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "rawkit", specifier = ">=0.6.0" }]

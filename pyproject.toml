@@ -1,0 +1,9 @@
+[project]
+name = "stellar-statistics"
+version = "0.1.0"
+description = "Processing and analysis tool for astronomical imaging"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "rawkit>=0.6.0",
+]
