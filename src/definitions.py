@@ -1,3 +1,7 @@
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent
+
+class Paths:
+    root = Path(__file__).parent.parent
+    observations = root / "data/observations"
+    calibration = root / "data/calibration"
