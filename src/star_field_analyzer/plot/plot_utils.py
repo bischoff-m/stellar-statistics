@@ -7,7 +7,9 @@ SubplotFunction = Callable[[plt.Axes], None]
 
 
 def subplots_grid(
-    subplot_funcs: list[list[SubplotFunction]], figsize: tuple[int, int]
+    subplot_funcs: list[list[SubplotFunction]],
+    figsize: tuple[int, int],
+    dpi: int = 100,
 ) -> plt.Figure:
     nrows = len(subplot_funcs)
     ncols = len(subplot_funcs[0])
@@ -16,7 +18,7 @@ def subplots_grid(
         ncols=ncols,
         figsize=figsize,
         layout="tight",
-        dpi=300,
+        dpi=dpi,
     )
 
     # Reshape axs to be a 2D list
