@@ -155,3 +155,17 @@ class ImageNBit(BaseModel):
         else:
             raise ValueError(f"Invalid channel {channel}.")
         return ImageNBit(image=img, bit_depth=self.bit_depth)
+
+    def rgb_channels(self) -> dict[str, "ImageNBit"]:
+        """Get the red, green, and blue channels of the image.
+
+        Returns
+        -------
+        tuple[ImageNBit, ImageNBit, ImageNBit]
+            Red, green, and blue channels.
+        """
+        return {
+            "red": self.channel("red"),
+            "green": self.channel("green"),
+            "blue": self.channel("blue"),
+        }
