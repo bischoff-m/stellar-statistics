@@ -16,6 +16,12 @@ To load raw images, the tool requires the
 installation to work on Windows, so I will only provide instructions for
 Linux.
 
+Install all OpenCV dependencies with:
+
+```bash
+sudo apt-get install python3-opencv
+```
+
 ### Libraw
 
 Follow the instructions on the [libraw
