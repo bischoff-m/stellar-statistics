@@ -13,7 +13,9 @@ class ImageNBit(BaseModel):
     bit_depth: int = Field(..., allow_mutation=False)
     pil_cache: Image.Image | None = None
 
-    def to_bitdepth(self, bit_depth: int) -> "ImageNBit":
+    def to_bitdepth(
+        self, bit_depth: int, astype: np.dtype | None = None
+    ) -> "ImageNBit":
         """Lossy conversion of image bit depth.
 
         Parameters
@@ -41,10 +43,12 @@ class ImageNBit(BaseModel):
         new_img[np.isnan(new_img)] = 0
         new_img = new_img / (2**self.bit_depth - 1) * (2**bit_depth - 1)
         new_img = np.round(new_img)
-        if bit_depth <= 8:
-            new_img = np.asarray(new_img, dtype=np.uint8)
-        else:
-            new_img = np.asarray(new_img, dtype=np.uint16)
+        new_type = (
+            astype
+            if astype is not None
+            else (np.uint8 if bit_depth <= 8 else np.uint16)
+        )
+        new_img = np.asarray(new_img, dtype=new_type)
 
         return ImageNBit(
             image=new_img, bit_depth=bit_depth, pil_cache=self.pil_cache

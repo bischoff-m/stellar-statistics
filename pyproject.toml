@@ -5,6 +5,7 @@ description = "Processing and analysis tool for astronomical imaging"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "astrometry>=4.1.2",
     "ipykernel>=6.29.5",
     "matplotlib>=3.9.3",
     "numpy>=2.1.3",

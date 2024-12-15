@@ -9,9 +9,10 @@ from .plot_utils import SubplotFunction, wrap_subplot
 def rgb_histograms(
     img: ImageNBit,
     bit_depth: int | None = None,
-    yaxis_relative: bool = False,
     n_bins: int = 600,
     title: str | None = None,
+    yaxis_relative: bool = False,
+    yaxis_log: bool = True,
 ) -> tuple[SubplotFunction]:
     if bit_depth is None:
         bit_depth = img.bit_depth
@@ -27,6 +28,7 @@ def rgb_histograms(
             title=f"{title} ({c.capitalize()})",
             label=c,
             color=c,
+            yaxis_log=yaxis_log,
         )
         for c, img in img.rgb_channels().items()
     )
@@ -36,11 +38,12 @@ def rgb_histograms(
 def pixel_histogram(
     img: ImageNBit,
     bit_depth: int | None = None,
-    yaxis_relative: bool = False,
     n_bins: int = 600,
     title: str | None = None,
     label: str | None = None,
     color: str | None = None,
+    yaxis_relative: bool = False,
+    yaxis_log: bool = True,
     ax: plt.Axes | None = None,
 ):
     if ax is None:
@@ -74,6 +77,8 @@ def pixel_histogram(
     ax.set_axisbelow(True)
     ax.legend()
     ax.set_xlim(0, 2**bit_depth)
+    if yaxis_log:
+        ax.set_yscale("log")
     if title is not None:
         ax.set_title(title)
 
