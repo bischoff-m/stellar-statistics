@@ -1,17 +1,28 @@
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
+import cv2
 import numpy as np
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ImageNBit(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     image: np.ndarray = Field(..., allow_mutation=False)
-    bit_depth: int = Field(..., allow_mutation=False)
+    bit_depth: int = Field(..., allow_mutation=False, ge=1)
     pil_cache: Image.Image | None = None
+
+    @model_validator(mode="after")
+    def check_and_clip_image(self) -> Self:
+        if self.image.shape == (0,):
+            return self
+        if self.image.min() < 0 or self.image.max() > 2**self.bit_depth - 1:
+            raise ValueError(
+                "Image values must be between 0 and 2^bit_depth - 1."
+            )
+        return self
 
     def to_bitdepth(
         self, bit_depth: int, astype: np.dtype | None = None
@@ -21,7 +32,7 @@ class ImageNBit(BaseModel):
         Parameters
         ----------
         bit_depth : int
-            Target bit depth. If 0, the image is normalized to 0-1 and has type
+            Target bit depth. If 1, the image is normalized to 0-1 and has type
             np.float64. If 8 or 16, the image is scaled to the target bit depth
             and has type np.uint8 or np.uint16, respectively.
 
@@ -30,10 +41,11 @@ class ImageNBit(BaseModel):
         ImageNBit
             Image with the target bit depth.
         """
+        if bit_depth < 1:
+            raise ValueError("Bit depth must be at least 1.")
         if bit_depth == self.bit_depth:
             return self
-
-        if bit_depth == 0:
+        if bit_depth == 1:
             new_img = self.image / (2**self.bit_depth - 1)
             return ImageNBit(
                 image=new_img, bit_depth=bit_depth, pil_cache=self.pil_cache
@@ -74,6 +86,8 @@ class ImageNBit(BaseModel):
         arr = np.nan_to_num(arr, nan=0)
         # To PIL and update cache
         self.pil_cache = Image.fromarray(arr)
+        if arr.ndim == 2:
+            self.pil_cache = self.pil_cache.convert("L")
         return self.pil_cache
 
     def show(self) -> None:
@@ -173,3 +187,56 @@ class ImageNBit(BaseModel):
             "green": self.channel("green"),
             "blue": self.channel("blue"),
         }
+
+    def green_interpolated(self) -> "ImageNBit":
+        """Interpolate green pixels in the raw image data.
+
+        Sets the value of green pixels to the mean of the 8 neighboring pixels.
+
+        Returns
+        -------
+        ImageNBit
+            Image with interpolated green pixels.
+        """
+        green_nan = self.channel("green").image
+        if green_nan.shape[0] % 2 != 0:
+            green_nan = green_nan[:-1, :]
+        if green_nan.shape[1] % 2 != 0:
+            green_nan = green_nan[:, :-1]
+
+        rows_odd = green_nan[::2, 1::2]
+        rows_even = green_nan[1::2, ::2]
+        green_only = np.zeros(
+            (rows_odd.shape[0] + rows_even.shape[0], rows_odd.shape[1]),
+        )
+        green_only[::2, :] = rows_odd
+        green_only[1::2, :] = rows_even
+
+        filter_odd = np.asarray(
+            [
+                [0, 1, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+            ]
+        )
+        filter_even = np.asarray(
+            [
+                [0, 1, 0],
+                [0, 1, 1],
+                [0, 1, 0],
+            ]
+        )
+        # Every new pixel corresponds to the cell on the left
+        new_odd = cv2.filter2D(green_only, -1, filter_odd)
+        new_odd /= np.sum(filter_odd)
+        # Every new pixel corresponds to the cell on the right
+        new_even = cv2.filter2D(green_only, -1, filter_even)
+        new_even /= np.sum(filter_even)
+
+        new_img = green_nan.copy()
+        new_img[::2, ::2] = new_odd[::2, :]
+        new_img[1::2, 1::2] = new_even[1::2, :]
+
+        # Clip to the original bit depth
+        new_img = np.clip(new_img, 0, 2**self.bit_depth - 1)
+        return ImageNBit(image=new_img, bit_depth=self.bit_depth)

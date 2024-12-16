@@ -58,7 +58,8 @@ def pixel_histogram(
 
     arr = img.image.flatten()
     arr = arr[~np.isnan(arr)]
-    bins = np.linspace(0, 2**bit_depth - 1, min(2**bit_depth, n_bins))
+    n_bins = min(n_bins, 2**bit_depth - 1) if bit_depth > 1 else n_bins
+    bins = np.linspace(0, 2**bit_depth - 1, n_bins)
 
     # Calculate the mean and standard deviation
     mean = np.mean(arr)
@@ -76,7 +77,7 @@ def pixel_histogram(
     ax.grid()
     ax.set_axisbelow(True)
     ax.legend()
-    ax.set_xlim(0, 2**bit_depth)
+    ax.set_xlim(0, 2**bit_depth - 1)
     if yaxis_log:
         ax.set_yscale("log")
     if title is not None:
