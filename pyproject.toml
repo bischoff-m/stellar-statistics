@@ -1,5 +1,5 @@
 [project]
-name = "stellar-statistics"
+name = "star_field_analyser"
 version = "0.1.0"
 description = "Processing and analysis tool for astronomical imaging"
 readme = "README.md"
@@ -15,5 +15,22 @@ dependencies = [
     "pillow>=11.0.0",
     "pydantic>=2.9.2",
     "rawkit>=0.6.0",
+    "scikit-learn>=1.6.0",
     "tqdm>=4.67.1",
 ]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["star_field_analyser"]
+package-dir = { "" = "src" }
+
+[tool.uv]
+dev-dependencies = [
+    "star-field-analyser",
+]
+
+[tool.uv.sources]
+star-field-analyser = { workspace = true }
