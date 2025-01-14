@@ -1,41 +1,88 @@
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal
 
 import cv2
 import numpy as np
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+import xxhash
+from numpy.typing import NDArray
 
 
-class ImageNBit(BaseModel, np.ndarray):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class ImageNBit(np.ndarray):
+    bit_depth: int
+    pil_cache: tuple[int, Image.Image] | None = None
 
-    image: np.ndarray = Field(..., allow_mutation=False)
-    bit_depth: int = Field(..., allow_mutation=False, ge=1)
-    pil_cache: Image.Image | None = None
+    def __new__(
+        cls,
+        image: NDArray,
+        bit_depth: int,
+        pil_cache: tuple[int, Image.Image] | None = None,
+    ):
+        """Create a new ImageNBit object.
 
-    @model_validator(mode="after")
-    def check_and_clip_image(self) -> Self:
-        # Skip if the image is empty
-        if self.image.shape == (0,):
-            return self
-        if self.image.min() < 0 or self.image.max() > 2**self.bit_depth - 1:
+        Parameters
+        ----------
+        image : NDArray
+            Image data. If the image has 3 dimensions, it must have 3 channels.
+        bit_depth : int
+            Bit depth of the image. If 1, the image is normalized to 0-1 and has
+            type np.float64. If <= 8 or <= 16, the image is scaled to the target
+            bit depth and has type np.uint8 or np.uint16, respectively.
+        pil_cache : tuple[int, Image.Image] | None, optional
+            PIL cache, by default None
+
+        Returns
+        -------
+        ImageNBit
+            ImageNBit object.
+        """
+        if image.ndim not in (2, 3):
+            raise ValueError("Image must have 2 or 3 dimensions.")
+        if image.ndim == 3 and image.shape[2] != 3:
+            raise ValueError(
+                "If image has 3 dimensions, it must have 3 channels."
+            )
+        if type(bit_depth) is not int:
+            raise ValueError("Bit depth must be an integer.")
+        if bit_depth < 1:
+            raise ValueError("Bit depth must be at least 1.")
+        if bit_depth > 16:
+            raise ValueError("Bit depth must be at most 16.")
+        if bit_depth != 1 and np.isnan(image).any():
+            raise ValueError("If bit depth is not 1, image cannot have NaN.")
+        if image.min() < 0 or image.max() > 2**bit_depth - 1:
             raise ValueError(
                 "Image values must be between 0 and 2^bit_depth - 1."
             )
-        return self
+        dtype = (
+            np.float64
+            if bit_depth == 1
+            else np.uint8
+            if bit_depth <= 8
+            else np.uint16
+        )
+        obj = np.asarray(image, dtype=dtype).view(cls)
+        obj.bit_depth = bit_depth
+        obj.pil_cache = pil_cache
+        return obj
 
-    def to_bitdepth(
-        self, bit_depth: int, astype: np.dtype | None = None
-    ) -> "ImageNBit":
+    def __array_finalize__(self, obj):
+        """Finalize the creation of the object. Needed for numpy ndarray
+        subclasses."""
+        if obj is None:
+            return
+        self.bit_depth = getattr(obj, "bit_depth", None)
+        self.pil_cache = getattr(obj, "pil_cache", None)
+
+    def to_bitdepth(self, bit_depth: int) -> "ImageNBit":
         """Lossy conversion of image bit depth.
 
         Parameters
         ----------
         bit_depth : int
             Target bit depth. If 1, the image is normalized to 0-1 and has type
-            np.float64. If 8 or 16, the image is scaled to the target bit depth
-            and has type np.uint8 or np.uint16, respectively.
+            np.float64. If <= 8 or <= 16, the image is scaled to the target bit
+            depth and has type np.uint8 or np.uint16, respectively.
 
         Returns
         -------
@@ -44,27 +91,29 @@ class ImageNBit(BaseModel, np.ndarray):
         """
         if bit_depth < 1:
             raise ValueError("Bit depth must be at least 1.")
+        if bit_depth > 16:
+            raise ValueError("Bit depth must be at most 16.")
         if bit_depth == self.bit_depth:
             return self
         if bit_depth == 1:
-            new_img = self.image / (2**self.bit_depth - 1)
-            return ImageNBit(
-                image=new_img, bit_depth=bit_depth, pil_cache=self.pil_cache
-            )
-
-        new_img = self.image.copy()
-        new_img[np.isnan(new_img)] = 0
-        new_img = new_img / (2**self.bit_depth - 1) * (2**bit_depth - 1)
-        new_img = np.round(new_img)
-        new_type = (
-            astype
-            if astype is not None
-            else (np.uint8 if bit_depth <= 8 else np.uint16)
+            new_img = self / (2**self.bit_depth - 1)
+        else:
+            new_img = self.copy()
+            new_img[np.isnan(new_img)] = 0
+            new_img = new_img / (2**self.bit_depth - 1) * (2**bit_depth - 1)
+            new_img = np.round(new_img)
+            new_type = np.uint8 if bit_depth <= 8 else np.uint16
+            new_img = np.asarray(new_img, dtype=new_type)
+        # Keep the pil_cache because the image data is the same
+        new_cache = (
+            None
+            if self.pil_cache is None
+            else (self._get_hash(), self.pil_cache[1])
         )
-        new_img = np.asarray(new_img, dtype=new_type)
-
         return ImageNBit(
-            image=new_img, bit_depth=bit_depth, pil_cache=self.pil_cache
+            image=new_img,
+            bit_depth=bit_depth,
+            pil_cache=new_cache,
         )
 
     def to_pil(self) -> Image.Image:
@@ -78,18 +127,22 @@ class ImageNBit(BaseModel, np.ndarray):
         Image.Image
             PIL Image.
         """
-        if self.pil_cache is not None:
-            return self.pil_cache
+        data_hash = self._get_hash()
+        if self.pil_cache is not None and self.pil_cache[0] == data_hash:
+            return self.pil_cache[1]
 
         # PIL expects 8-bit images
-        arr = self.to_bitdepth(8).image
+        arr = self.to_bitdepth(8)
         # Replace NaN with 0
-        arr = np.nan_to_num(arr, nan=0)
+        arr = np.nan_to_num(arr, nan=0).view(np.uint8)
         # To PIL and update cache
-        self.pil_cache = Image.fromarray(arr)
+        pil_img = Image.fromarray(arr)
         if arr.ndim == 2:
-            self.pil_cache = self.pil_cache.convert("L")
-        return self.pil_cache
+            pil_img = pil_img.convert("L")
+        elif arr.ndim == 3:
+            pil_img = pil_img.convert("RGB")
+        self.pil_cache = (data_hash, pil_img)
+        return self.pil_cache[1]
 
     def show(self) -> None:
         """Display the image."""
@@ -139,15 +192,20 @@ class ImageNBit(BaseModel, np.ndarray):
         int
             Value scaled to the image bit depth.
         """
-        return np.round(value * (2**self.bit_depth - 1)).astype(np.uint16)
+        if value < 0 or value > 1:
+            raise ValueError("Value must be between 0 and 1.")
+        if self.bit_depth == 1:
+            return value
+        return np.round(value * (2**self.bit_depth - 1)).astype(self.dtype)
 
     def channel(
         self, channel: Literal["red"] | Literal["green"] | Literal["blue"]
     ) -> "ImageNBit":
         """Get a single channel of the image.
 
-        Sets all pixels except the specified channel to np.nan in a Bayer
-        sensor image with a filter pattern of RGGB.
+        Converts the image to bitdepth=1 and sets all pixels except the
+        specified channel to np.nan in a Bayer sensor image with a filter
+        pattern of RGGB.
 
         Parameters
         ----------
@@ -159,7 +217,9 @@ class ImageNBit(BaseModel, np.ndarray):
         ImageNBit
             Image with only the specified channel.
         """
-        img = self.image.copy().astype(np.float64)
+        if self.ndim != 2:
+            raise ValueError("Image must have 2 dimensions.")
+        img = self.to_bitdepth(1)
         if channel == "red":
             img[::2, 1::2] = np.nan  # G
             img[1::2, ::2] = np.nan  # G
@@ -173,7 +233,7 @@ class ImageNBit(BaseModel, np.ndarray):
             img[1::2, ::2] = np.nan  # G
         else:
             raise ValueError(f"Invalid channel {channel}.")
-        return ImageNBit(image=img, bit_depth=self.bit_depth)
+        return img
 
     def rgb_channels(self) -> dict[str, "ImageNBit"]:
         """Get the red, green, and blue channels of the image.
@@ -189,17 +249,23 @@ class ImageNBit(BaseModel, np.ndarray):
             "blue": self.channel("blue"),
         }
 
-    def green_interpolated(self) -> "ImageNBit":
+    def green_interpolated(self, keep_bitdepth: bool = False) -> "ImageNBit":
         """Interpolate green pixels in the raw image data.
 
         Sets the value of green pixels to the mean of the 8 neighboring pixels.
+
+        Parameters
+        ----------
+        keep_bitdepth : bool, optional
+            If False, the image is normalized to 0-1. Otherwise, the original
+            bit depth is restored, by default False
 
         Returns
         -------
         ImageNBit
             Image with interpolated green pixels.
         """
-        green_nan = self.channel("green").image
+        green_nan = self.channel("green")
         if green_nan.shape[0] % 2 != 0:
             green_nan = green_nan[:-1, :]
         if green_nan.shape[1] % 2 != 0:
@@ -238,68 +304,17 @@ class ImageNBit(BaseModel, np.ndarray):
         new_img[::2, ::2] = new_odd[::2, :]
         new_img[1::2, 1::2] = new_even[1::2, :]
 
-        # Clip to the original bit depth
-        new_img = np.clip(new_img, 0, 2**self.bit_depth - 1)
-        return ImageNBit(image=new_img, bit_depth=self.bit_depth)
+        new_img = np.clip(new_img, 0, 1)
+        if keep_bitdepth:
+            new_img = new_img.to_bitdepth(self.bit_depth)
+        return new_img
 
-    def __add__(self, other) -> "ImageNBit":
-        arr = self.image.__add__(other)
-        return ImageNBit(image=arr, bit_depth=self.bit_depth)
+    def _get_hash(self) -> int:
+        """Get a hash of the image data.
 
-    def __sub__(self, other) -> "ImageNBit":
-        arr = self.image.__sub__(other)
-        return ImageNBit(image=arr, bit_depth=self.bit_depth)
-
-    def __mul__(self, other) -> "ImageNBit":
-        arr = self.image.__mul__(other)
-        return ImageNBit(image=arr, bit_depth=self.bit_depth)
-
-    def __truediv__(self, other) -> "ImageNBit":
-        arr = self.image.__truediv__(other)
-        return ImageNBit(image=arr, bit_depth=self.bit_depth)
-
-    def __len__(self) -> int:
-        return len(self.image)
-
-    def __lt__(self, other) -> bool:
-        return self.image < other
-
-    def __gt__(self, other) -> bool:
-        return self.image > other
-
-    def __le__(self, other) -> bool:
-        return self.image <= other
-
-    def __ge__(self, other) -> bool:
-        return self.image >= other
-
-    def __eq__(self, other) -> bool:
-        return self.image == other
-
-    def __ne__(self, other) -> bool:
-        return self.image != other
-
-    def __array__(self):
-        return self.image
-
-    def __getitem__(self, key):
-        return self.image[key]
-
-    def __setitem__(self, key, value):
-        self.image[key] = value
-
-    def clip(
-        self, min: int | None = None, max: int | None = None
-    ) -> "ImageNBit":
-        return ImageNBit(
-            image=np.clip(self.image, min, max), bit_depth=self.bit_depth
-        )
-
-    # def min(self) -> int:
-    #     return self.image.min()
-
-    # def max(self) -> int:
-    #     return self.image.max()
-
-    def __getattr__(self, name: str):
-        return getattr(self.image, name)
+        Returns
+        -------
+        int
+            Hash of the image data.
+        """
+        return xxhash.xxh64_intdigest(self.data.tobytes())

@@ -17,6 +17,7 @@ dependencies = [
     "rawkit>=0.6.0",
     "scikit-learn>=1.6.0",
     "tqdm>=4.67.1",
+    "xxhash>=3.5.0",
 ]
 
 [build-system]

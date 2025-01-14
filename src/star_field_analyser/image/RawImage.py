@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from pydantic import BaseModel
 from rawkit.raw import Raw
+from numpy.typing import NDArray
 
 from .ImageNBit import ImageNBit
 
@@ -23,10 +24,11 @@ class Metadata(BaseModel):
     iso: int
     timestamp: datetime.datetime
     camera: str
+    bit_depth: int
 
 
 def require_loaded(func):
-    def wrapper(self, *args, **kwargs):
+    def wrapper(self: "RawImage", *args, **kwargs):
         if not self.is_loaded():
             self.load()
         assert self.is_loaded(), "Image data could not be loaded."
@@ -36,7 +38,12 @@ def require_loaded(func):
 
 
 class RawImage:
+    metadata: Metadata
+    _raw: ImageNBit | None = None
+
     def __init__(self, filepath: Path, bit_depth: int = CameraInfo.bit_depth):
+        if bit_depth < 1 or bit_depth > 16:
+            raise ValueError("Bit depth must be between or equal to 1 and 16.")
         self.filepath = filepath
         with Raw(filepath.as_posix()) as raw:
             self.metadata = Metadata(
@@ -50,9 +57,8 @@ class RawImage:
                     raw.metadata.timestamp
                 ),
                 camera=f"{raw.metadata.make.decode('utf-8')} {raw.metadata.model.decode('utf-8')}",
+                bit_depth=bit_depth,
             )
-            # Raw image data
-            self._raw = ImageNBit(image=np.empty(0), bit_depth=bit_depth)
 
     def load(self) -> "RawImage":
         """Load the raw image data as a numpy array.
@@ -64,7 +70,9 @@ class RawImage:
         with Raw(self.filepath.as_posix()) as raw:
             # Read raw image data
             raw_data = np.asarray(raw.raw_image(), dtype=np.uint16)
-            self._raw = ImageNBit(image=raw_data, bit_depth=self._raw.bit_depth)
+            self._raw = ImageNBit(
+                image=raw_data, bit_depth=self.metadata.bit_depth
+            )
         return self
 
     def is_loaded(self) -> bool:
@@ -75,7 +83,7 @@ class RawImage:
         bool
             True if the raw image data is loaded.
         """
-        return self._raw.image.size > 0
+        return self._raw is not None
 
     @require_loaded
     def raw(self) -> ImageNBit:
@@ -89,19 +97,19 @@ class RawImage:
         return self._raw
 
     @require_loaded
-    def dead_pixels(self, threshold: float = 0.5) -> np.ndarray:
-        dead = self._raw.image < self._raw.norm_to_nbit(threshold)
+    def dead_pixels(self, threshold: float = 0.5) -> NDArray[np.bool_]:
+        dead = self._raw < self._raw.norm_to_nbit(threshold)
         assert (
             np.sum(dead) < self.metadata.width * self.metadata.height * 0.1
         ), "More than 10% of pixels are dead. Did you use a white image?"
         return dead
 
     @require_loaded
-    def hot_pixels(self, threshold: float = 0.5) -> np.ndarray:
-        hot = self._raw.image > self._raw.norm_to_nbit(threshold)
-        assert (
-            np.sum(hot) < self.metadata.width * self.metadata.height * 0.1
-        ), "More than 10% of pixels are hot. Did you use a black image?"
+    def hot_pixels(self, threshold: float = 0.5) -> NDArray[np.bool_]:
+        hot = self._raw > self._raw.norm_to_nbit(threshold)
+        assert np.sum(hot) < self.metadata.width * self.metadata.height * 0.1, (
+            "More than 10% of pixels are hot. Did you use a black image?"
+        )
         return hot
 
     @require_loaded
@@ -113,11 +121,13 @@ class RawImage:
 
     @require_loaded
     def to_rgb_cv2(self) -> ImageNBit:
-        img = np.asarray(self._raw.image, dtype=np.uint16)
+        img = self._raw.to_bitdepth(16)
         if CameraInfo.filter_pattern == "RGGB":
             img = cv2.cvtColor(img, cv2.COLOR_BayerBG2BGR)
         else:
             raise NotImplementedError(
                 f"Filter pattern {CameraInfo.filter_pattern} not implemented."
             )
-        return ImageNBit(image=img, bit_depth=self._raw.bit_depth)
+        return ImageNBit(image=img, bit_depth=16).to_bitdepth(
+            self._raw.bit_depth
+        )
