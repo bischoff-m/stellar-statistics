@@ -51,13 +51,14 @@ def pixel_histogram(
     if img.ndim != 2:
         raise ValueError("Input image must be raw sensor image 2D array")
 
+    nan_mask = np.isnan(img)
     if bit_depth is None:
         bit_depth = img.bit_depth
     else:
         img = img.to_bitdepth(bit_depth)
 
     arr = img.flatten()
-    arr = arr[~np.isnan(arr)]
+    arr = arr[~nan_mask.flatten()]
     n_bins = min(n_bins, 2**bit_depth - 1) if bit_depth > 1 else n_bins
     bins = np.linspace(0, 2**bit_depth - 1, n_bins)
 
