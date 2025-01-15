@@ -1,5 +1,5 @@
 [project]
-name = "star_field_analyser"
+name = "celestializer"
 version = "0.1.0"
 description = "Processing and analysis tool for astronomical imaging"
 readme = "README.md"
@@ -25,13 +25,11 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["star_field_analyser"]
+packages = ["celestializer"]
 package-dir = { "" = "src" }
 
 [tool.uv]
-dev-dependencies = [
-    "star-field-analyser",
-]
+dev-dependencies = ["celestializer"]
 
 [tool.uv.sources]
-star-field-analyser = { workspace = true }
+celestializer = { workspace = true }

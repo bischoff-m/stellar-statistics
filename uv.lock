@@ -1019,7 +1019,7 @@ wheels = [
 ]
 
 [[package]]
-name = "star-field-analyser"
+name = "celestializer"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -1056,7 +1056,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "star-field-analyser", editable = "." }]
+dev = [{ name = "celestializer", editable = "." }]
 
 [[package]]
 name = "threadpoolctl"

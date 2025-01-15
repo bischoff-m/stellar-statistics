@@ -26,7 +26,7 @@ class ImageNBit(np.ndarray):
             Image data. If the image has 3 dimensions, it must have 3 channels.
         bit_depth : int
             Bit depth of the image. If 1, the image is normalized to 0-1 and has
-            type np.float64. If <= 8 or <= 16, the image is scaled to the target
+            type np.float32. If <= 8 or <= 16, the image is scaled to the target
             bit depth and has type np.uint8 or np.uint16, respectively.
         pil_cache : tuple[int, Image.Image] | None, optional
             PIL cache, by default None
@@ -55,7 +55,7 @@ class ImageNBit(np.ndarray):
                 "Image values must be between 0 and 2^bit_depth - 1."
             )
         dtype = (
-            np.float64
+            np.float32
             if bit_depth == 1
             else np.uint8
             if bit_depth <= 8
@@ -81,7 +81,7 @@ class ImageNBit(np.ndarray):
         ----------
         bit_depth : int
             Target bit depth. If 1, the image is normalized to 0-1 and has type
-            np.float64. If <= 8 or <= 16, the image is scaled to the target bit
+            np.float32. If <= 8 or <= 16, the image is scaled to the target bit
             depth and has type np.uint8 or np.uint16, respectively.
 
         Returns

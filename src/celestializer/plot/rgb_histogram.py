@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from star_field_analyser.image import ImageNBit
+from celestializer.image import ImageNBit
 
 from .plot_utils import SubplotFunction, wrap_subplot
 

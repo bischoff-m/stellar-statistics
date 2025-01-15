@@ -2,8 +2,8 @@ from typing import List
 
 import pandas as pd
 
-from star_field_analyser.definitions import Paths
-from star_field_analyser.image import RawImage
+from celestializer.definitions import Paths
+from celestializer.image import RawImage
 
 
 def list_observations() -> List[RawImage]:
