@@ -253,6 +253,8 @@ class ImageNBit(np.ndarray):
         """Interpolate green pixels in the raw image data.
 
         Sets the value of green pixels to the mean of the 8 neighboring pixels.
+        If the image has an odd number of rows or columns, the last row or
+        column is removed.
 
         Parameters
         ----------
@@ -300,7 +302,7 @@ class ImageNBit(np.ndarray):
         new_even = cv2.filter2D(green_only, -1, filter_even)
         new_even /= np.sum(filter_even)
 
-        new_img = green_nan.copy()
+        new_img: ImageNBit = green_nan.copy()
         new_img[::2, ::2] = new_odd[::2, :]
         new_img[1::2, 1::2] = new_even[1::2, :]
 
@@ -308,6 +310,23 @@ class ImageNBit(np.ndarray):
         if keep_bitdepth:
             new_img = new_img.to_bitdepth(self.bit_depth)
         return new_img
+
+    def cutoff(self, threshold: float) -> "ImageNBit":
+        """Set all values below a threshold to 0.
+
+        Parameters
+        ----------
+        threshold : float
+            Threshold value.
+
+        Returns
+        -------
+        ImageNBit
+            Image with values below the threshold set to 0.
+        """
+        img = self.copy()
+        img[img < threshold] = 0
+        return img
 
     def _get_hash(self) -> int:
         """Get a hash of the image data.
