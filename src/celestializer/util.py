@@ -1,28 +1,28 @@
 from typing import List
-
 import pandas as pd
+import celestializer as cl
+import numpy as np
+from numpy.typing import NDArray
+import cv2
 
-from celestializer.definitions import Paths
-from celestializer.image import RawImage
 
-
-def list_observations() -> List[RawImage]:
+def list_observations() -> List[cl.RawImage]:
     return [
-        RawImage(file)
+        cl.RawImage(file)
         for file in [
-            *Paths.observations.glob("**/*"),
-            *Paths.calibration.glob("**/*"),
+            *cl.Paths.observations.glob("**/*"),
+            *cl.Paths.calibration.glob("**/*"),
         ]
         if file.suffix.lower() in [".cr2", ".dng"]
     ]
 
 
-def raw_to_df(files: List[RawImage]) -> pd.DataFrame:
+def raw_to_df(files: List[cl.RawImage]) -> pd.DataFrame:
     data = []
     for file in files:
         data.append(
             {
-                "filepath": file.filepath.relative_to(Paths.data).as_posix(),
+                "filepath": file.filepath.relative_to(cl.Paths.data).as_posix(),
             }
             | file.metadata.model_dump()
         )
@@ -92,3 +92,48 @@ def grab_series(df: pd.DataFrame, by: str) -> pd.DataFrame:
     # Return the longest series
     start, end = segmented[0]
     return df.iloc[start:end].copy().sort_values(by)
+
+
+def fill_holes(img: cl.ImageNBit, mask: NDArray[np.bool]) -> cl.ImageNBit:
+    assert img.bit_depth == 8, "Not sure if this works for other bit depths"
+    assert not np.isnan(img).any(), "Not sure if this works for NaN values"
+    # Get most common color in img
+    (hist, _) = np.histogram(img, bins=np.arange(257))
+    color = np.argmax(hist)
+
+    # Fill mask with color
+    img_filled = img.copy()
+    img_filled[mask] = color
+    return cl.ImageNBit(img_filled, img.bit_depth)
+
+
+def show_stars(
+    img: cl.ImageNBit,
+    stars: list[cl.StarCenter] | list[cl.StarMag],
+    radius: int = 40,
+    show_magnitude: bool = True,
+) -> cl.ImageNBit:
+    img = img.to_bitdepth(8)
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    half_radius = radius // 2
+    for star in stars:
+        img = cv2.rectangle(
+            img,
+            (star.x - half_radius, star.y - half_radius),
+            (star.x + half_radius, star.y + half_radius),
+            (0, 255, 0),
+            2,
+        )
+        if not show_magnitude or not hasattr(star, "magnitude"):
+            continue
+        img = cv2.putText(
+            img,
+            f"{star.magnitude:.2f}",
+            (star.x - half_radius - 5, star.y - half_radius - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2,
+        )
+    return cl.ImageNBit(image=img, bit_depth=8)

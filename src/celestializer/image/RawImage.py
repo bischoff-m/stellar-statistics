@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 from pydantic import BaseModel
 from rawkit.raw import Raw
-from numpy.typing import NDArray
 
 from .ImageNBit import ImageNBit
 
@@ -95,22 +94,6 @@ class RawImage:
             Raw image data.
         """
         return self._raw
-
-    @require_loaded
-    def dead_pixels(self, threshold: float = 0.5) -> NDArray[np.bool_]:
-        dead = self._raw < self._raw.norm_to_nbit(threshold)
-        assert (
-            np.sum(dead) < self.metadata.width * self.metadata.height * 0.1
-        ), "More than 10% of pixels are dead. Did you use a white image?"
-        return dead
-
-    @require_loaded
-    def hot_pixels(self, threshold: float = 0.5) -> NDArray[np.bool_]:
-        hot = self._raw > self._raw.norm_to_nbit(threshold)
-        assert np.sum(hot) < self.metadata.width * self.metadata.height * 0.1, (
-            "More than 10% of pixels are hot. Did you use a black image?"
-        )
-        return hot
 
     @require_loaded
     def to_rgb_rawkit(self) -> ImageNBit:
