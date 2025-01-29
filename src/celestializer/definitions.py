@@ -6,3 +6,4 @@ class Paths:
     data = root / "data"
     observations = data / "observations"
     calibration = data / "calibration"
+    saved = data / "saved"

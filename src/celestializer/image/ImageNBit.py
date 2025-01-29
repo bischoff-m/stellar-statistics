@@ -328,6 +328,26 @@ class ImageNBit(np.ndarray):
         img[img < threshold] = 0
         return img
 
+    def upscale(self, factor: int) -> "ImageNBit":
+        """Upscale the image by a factor.
+
+        Parameters
+        ----------
+        factor : int
+            Upscale factor.
+
+        Returns
+        -------
+        ImageNBit
+            Upscaled image.
+        """
+        if factor < 2:
+            raise ValueError("Upscale factor must be at least 2.")
+        if self.ndim == 2:
+            return np.kron(self, np.ones((factor, factor)))
+        else:
+            return np.kron(self, np.ones((factor, factor, 1)))
+
     def _get_hash(self) -> int:
         """Get a hash of the image data.
 

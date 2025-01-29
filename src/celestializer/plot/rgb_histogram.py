@@ -13,6 +13,7 @@ def rgb_histograms(
     title: str | None = None,
     yaxis_relative: bool = False,
     yaxis_log: bool = True,
+    sigma_factor: int = 3,
 ) -> list[SubplotFunction]:
     if bit_depth is None:
         bit_depth = img.bit_depth
@@ -29,6 +30,7 @@ def rgb_histograms(
             label=c,
             color=c,
             yaxis_log=yaxis_log,
+            sigma_factor=sigma_factor,
         )
         for c, img in img.rgb_channels().items()
     )
@@ -45,11 +47,14 @@ def pixel_histogram(
     yaxis_relative: bool = False,
     yaxis_log: bool = True,
     ax: plt.Axes | None = None,
+    sigma_factor: int = 3,
 ):
     if ax is None:
         raise ValueError("Must provide an axis to plot the histogram")
     if img.ndim != 2:
         raise ValueError("Input image must be raw sensor image 2D array")
+    if sigma_factor < 1:
+        raise ValueError("Sigma factor must be at least 1")
 
     nan_mask = np.isnan(img)
     if bit_depth is None:
@@ -64,14 +69,15 @@ def pixel_histogram(
 
     # Calculate the mean and standard deviation
     mean = np.mean(arr)
-    std = np.std(arr)
+    std = np.std(arr) * sigma_factor
     label = f"{label}\n" if label is not None else ""
     # Plot the histogram
+    sigma_str = f"{sigma_factor}" if sigma_factor != 1 else ""
     ax.hist(
         arr,
         bins,
         color=color,
-        label=f"{label}$mu$={mean:.2f}\n$sigma$={std:.2f}",
+        label=f"{label}$\\mu$={mean:.2f}\n${sigma_str}\\sigma$={std:.2f}",
         weights=np.ones_like(arr) / len(arr) if yaxis_relative else None,
     )
 
@@ -84,7 +90,7 @@ def pixel_histogram(
     if title is not None:
         ax.set_title(title)
 
-    line_param = {"color": "#0008", "linestyle": "dashed", "linewidth": 1}
+    line_param = {"color": "black", "linewidth": 1}
     ax.axvline(mean, **line_param)
-    ax.axvline(mean - std, **line_param)
-    ax.axvline(mean + std, **line_param)
+    ax.axvline(mean - std, linestyle="dashed", **line_param)
+    ax.axvline(mean + std, linestyle="dashed", **line_param)

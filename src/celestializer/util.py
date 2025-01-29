@@ -57,7 +57,7 @@ def grab_series(df: pd.DataFrame, by: str) -> pd.DataFrame:
         raise ValueError("DataFrame is empty.")
 
     # Sort df by timestamp
-    df.sort_values("timestamp", inplace=True)
+    df = df.sort_values("timestamp")
     fixed_columns = [
         "width",
         "height",

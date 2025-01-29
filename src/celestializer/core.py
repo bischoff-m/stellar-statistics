@@ -1,13 +1,12 @@
+import astrometry
 import cv2
 from pydantic import BaseModel, ConfigDict
-from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 import celestializer as cl
 import numpy as np
 from astrometry import Match
 from numpy.typing import NDArray
-
-from celestializer.image import ImageNBit
+from scipy.ndimage import convolve
 
 
 class StarCenter(BaseModel):
@@ -22,19 +21,8 @@ class StarMag(StarCenter):
 class StarPixels(StarCenter):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    bounding_box: cv2.typing.Rect
+    bbox: cv2.typing.Rect
     mask: NDArray[np.bool]
-
-
-def predict_magnitude(img: ImageNBit, star: StarPixels) -> StarMag:
-    # Extract star pixels
-    star_pixels = img[
-        star.bounding_box[1] : star.bounding_box[1] + star.bounding_box[3],
-        star.bounding_box[0] : star.bounding_box[0] + star.bounding_box[2],
-    ]
-    star_pixels = star_pixels[star.mask]
-    magnitude = -2.5 * np.log10(star_pixels.mean())
-    return StarMag(x=star.x, y=star.y, magnitude=magnitude)
 
 
 def show_stars(
@@ -55,7 +43,7 @@ def show_stars(
             (0, 255, 0),
             2,
         )
-        if not show_magnitude or not isinstance(star, StarMag):
+        if not show_magnitude or not hasattr(star, "magnitude"):
             continue
         img = cv2.putText(
             img,
@@ -69,10 +57,13 @@ def show_stars(
     return cl.ImageNBit(image=img, bit_depth=8)
 
 
-def stars_by_flood_fill(img: cl.ImageNBit) -> list[cl.StarPixels]:
+def classify_star_pixels(
+    img: cl.ImageNBit, tolerance: int = 5
+) -> NDArray[np.bool]:
     assert img.ndim == 2, "Image must be 2D"
     # Must be CV_8U for flood fill
     assert img.bit_depth == 8, "Image must be 8-bit"
+    assert not np.isnan(img).any(), "Image must not contain NaN values"
 
     # Find darkest pixel
     min_loc = np.unravel_index(np.argmin(img), img.shape)
@@ -82,10 +73,10 @@ def stars_by_flood_fill(img: cl.ImageNBit) -> list[cl.StarPixels]:
     cv2.floodFill(
         img,
         mask,
-        min_loc,
+        [min_loc[1], min_loc[0]],
         255,
         loDiff=100,
-        upDiff=3,
+        upDiff=tolerance,
         flags=cv2.FLOODFILL_MASK_ONLY,
     )
     # Remove border and invert mask
@@ -94,31 +85,37 @@ def stars_by_flood_fill(img: cl.ImageNBit) -> list[cl.StarPixels]:
     # Remove single pixels from mask
     kernel = np.asarray([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return mask.astype(np.bool)
 
+
+def stars_from_mask(mask: NDArray[np.bool]) -> list[StarPixels]:
+    mask = mask.astype(np.uint8)
     # Find connected components
     n_stars, labels = cv2.connectedComponents(mask, connectivity=4)
-
+    print(f"Found {n_stars} stars")
     # Find star centers using moments
     stars = []
     for i in tqdm(range(1, n_stars)):
         mask_star = labels == i
         mask_star_int = mask_star.astype(np.uint8)
-        moments = cv2.moments(mask_star_int)
-        if moments["m00"] == 0:
-            continue
-        x = int(moments["m10"] / moments["m00"])
-        y = int(moments["m01"] / moments["m00"])
         # Extract bounding box part of the mask
         bbox = cv2.boundingRect(mask_star_int)
+        star_only = mask_star_int[
+            bbox[1] : bbox[1] + bbox[3],
+            bbox[0] : bbox[0] + bbox[2],
+        ].copy()
+        # Use moments to find center
+        moments = cv2.moments(star_only)
+        if moments["m00"] == 0:
+            continue
+        x = int(moments["m10"] / moments["m00"]) + bbox[0]
+        y = int(moments["m01"] / moments["m00"]) + bbox[1]
         stars.append(
-            cl.StarPixels(
+            StarPixels(
                 x=x,
                 y=y,
-                bounding_box=bbox,
-                mask=mask_star[
-                    bbox[1] : bbox[1] + bbox[3],
-                    bbox[0] : bbox[0] + bbox[2],
-                ].copy(),
+                bbox=bbox,
+                mask=star_only.astype(np.bool),
             )
         )
     return stars
@@ -162,6 +159,7 @@ def fill_holes(img: cl.ImageNBit, mask: NDArray[np.bool]) -> cl.ImageNBit:
     # Get most common color in img
     (hist, _) = np.histogram(img, bins=np.arange(257))
     color = np.argmax(hist)
+    print(f"Color: {color}")
 
     # Fill mask with color
     img_filled = img.copy()
@@ -169,11 +167,25 @@ def fill_holes(img: cl.ImageNBit, mask: NDArray[np.bool]) -> cl.ImageNBit:
     return cl.ImageNBit(img_filled, img.bit_depth)
 
 
-def fit_vignette(img: cl.ImageNBit) -> LinearRegression:
-    pass
+def correct_vignetting(
+    img: cl.ImageNBit, img_white: cl.ImageNBit
+) -> cl.ImageNBit:
+    # Divide by white image
+    img_white = img_white.channel("green")
+    assert img_white.bit_depth == 1, "White image must have values in [0, 1]"
+    mean = np.nanmean(img_white)
+    std = np.nanstd(img_white)
+    max_val = np.nanmax(img_white)
+    if max_val < mean + 3 * std:
+        raise ValueError("White image has too many saturated pixels")
+    img_white /= np.nanpercentile(img_white, 99.999)
+    img_white = img_white.clip(0, 1)
+    img_new = img / img_white
+    img_new = img_new.clip(0, 1)
+    return img_new
 
 
-def correct_vignette(img: cl.ImageNBit) -> cl.ImageNBit:
+def correct_skyglow(img: cl.ImageNBit) -> cl.ImageNBit:
     kernel_size = min(img.shape) // 10 * 2 + 1
     img_blur = cv2.GaussianBlur(
         img, (kernel_size, kernel_size), kernel_size / 4
@@ -184,17 +196,99 @@ def correct_vignette(img: cl.ImageNBit) -> cl.ImageNBit:
     return img
 
 
-def find_coordinates(img: cl.ImageNBit, camera: cl.CameraInfo) -> Match:
-    pass
+def find_coordinates(stars: list[StarCenter], camera: cl.CameraInfo) -> Match:
+    print("Finding coordinates")
+    solver = astrometry.Solver(
+        astrometry.series_4100.index_files(
+            cache_directory=cl.Paths.data / "astrometry_cache",
+        )
+        # + astrometry.series_5200.index_files(
+        #     cache_directory=cl.Paths.data / "astrometry_cache",
+        # )
+    )
+    # TODO: Use camera info to set size_hint
+    solution = solver.solve(
+        stars=[(star.x, star.y) for star in stars],
+        size_hint=astrometry.SizeHint(
+            lower_arcsec_per_pixel=40,
+            upper_arcsec_per_pixel=50,
+        ),
+        position_hint=None,
+        solution_parameters=astrometry.SolutionParameters(),
+    )
+
+    if not solution.has_match():
+        raise ValueError("No solution found")
+    return solution.best_match()
+
+
+def find_defects(
+    img: cl.ImageNBit, threshold_hot: float = 3, threshold_dead: float = 1.2
+) -> tuple[NDArray[np.bool], NDArray[np.bool]]:
+    # Find pixels that deviate from their neighbors by more than threshold *
+    # standard deviation
+
+    # Right now, this assumes that the image only consists of the green channel
+    assert img.bit_depth == 1, "Image values must be between 0 and 1"
+    # Set up a kernel that averages neighboring pixels
+    kernel = np.array(
+        [
+            [1, 0, 1],
+            [0, 0, 0],
+            [1, 0, 1],
+        ],
+        dtype=np.float32,
+    )
+    num_neighbors = kernel.sum()
+    kernel /= num_neighbors
+
+    # Calculate the mean and standard deviation of the image
+    img_mean = convolve(img, kernel, mode="constant", cval=np.nan)
+    img_sq_mean = convolve(img**2, kernel, mode="constant", cval=np.nan)
+    img_var = (img_sq_mean - img_mean**2 / num_neighbors) / num_neighbors
+    img_std = np.sqrt(img_var)
+
+    # Find hot and dead pixels
+    mask_hot = cl.ImageNBit(np.zeros_like(img, dtype=np.float32), 1)
+    mask_dead = cl.ImageNBit(np.zeros_like(img, dtype=np.float32), 1)
+    mask_hot[img > img_mean + threshold_hot * img_std] = 1
+    mask_dead[img < img_mean - threshold_dead * img_std] = 1
+
+    return mask_hot.astype(np.bool), mask_dead.astype(np.bool)
+
+
+def replace_defects(img: cl.ImageNBit, mask: NDArray[np.bool]) -> cl.ImageNBit:
+    # Replace with median
+    img_median = np.median(img[~mask & ~np.isnan(img)])
+    img_out = img.copy()
+    img_out[mask] = img_median
+
+    # Replace with average of neighbors
+    kernel = np.array(
+        [
+            [1, 0, 1],
+            [0, 0, 0],
+            [1, 0, 1],
+        ],
+        dtype=np.float32,
+    )
+    kernel /= kernel.sum()
+    img_out[mask] = convolve(img_out, kernel, mode="constant", cval=np.nan)[
+        mask
+    ]
+    return img_out
 
 
 def preprocess(
     img_sky: cl.ImageNBit,
-    img_black: cl.ImageNBit | None = None,
     img_white: cl.ImageNBit | None = None,
+    img_black: cl.ImageNBit | None = None,
 ) -> cl.ImageNBit:
     img = img_sky.channel("green")
     assert img.bit_depth == 1, "Image must have values in [0, 1]"
+
+    if img_white:
+        img = correct_vignetting(img, img_white)
 
     if img_black:
         # Subtract mean of black image
@@ -202,14 +296,14 @@ def preprocess(
         img = img - np.nanmean(img_black)
         img = img.clip(0, 1)
 
-    if img_white:
-        # Apply vignetting correction
-        model = fit_vignette(img_white)
-        img = correct_vignette(img, model)
+    img = correct_skyglow(img)
 
-    # Interpolate and normalize
-    img = img.green_interpolated()
+    # TODO: Correct hot and dead pixels
+
+    # Normalize and interpolate
+    img -= img.min()
     img /= img.max()
+    img = img.green_interpolated()
     return img
 
 
