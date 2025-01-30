@@ -1,10 +1,9 @@
-import astrometry
 import cv2
 from tqdm import tqdm
 import celestializer as cl
 import numpy as np
-from astrometry import Match
 from numpy.typing import NDArray
+from sklearn.cluster import KMeans
 
 
 def classify_star_pixels(
@@ -52,7 +51,7 @@ def classify_star_pixels(
     return mask.astype(np.bool)
 
 
-def stars_from_mask(mask: NDArray[np.bool]) -> list[cl.StarPixels]:
+def stars_from_mask(mask: NDArray[np.bool]) -> list[cl.StarMasked]:
     """Find stars in a mask of star pixels.
 
     Parameters
@@ -68,7 +67,6 @@ def stars_from_mask(mask: NDArray[np.bool]) -> list[cl.StarPixels]:
     mask = mask.astype(np.uint8)
     # Find connected components
     n_stars, labels = cv2.connectedComponents(mask, connectivity=4)
-    print(f"Found {n_stars} stars")
     # Find star centers using moments
     stars = []
     for i in tqdm(range(1, n_stars)):
@@ -87,7 +85,7 @@ def stars_from_mask(mask: NDArray[np.bool]) -> list[cl.StarPixels]:
         x = int(moments["m10"] / moments["m00"]) + bbox[0]
         y = int(moments["m01"] / moments["m00"]) + bbox[1]
         stars.append(
-            cl.StarPixels(
+            cl.StarMasked(
                 x=x,
                 y=y,
                 bbox=bbox,
@@ -145,50 +143,55 @@ def stars_by_template(
     return [cl.StarCenter(x=x, y=y) for x, y in matches]
 
 
-def find_coordinates(
-    stars: list[cl.StarCenter], camera: cl.CameraInfo
-) -> Match:
-    """Get a pixel-to-sky transformation from a list of stars using the
-    astrometry library.
-
-    Parameters
-    ----------
-    stars : list[cl.StarCenter]
-        List of stars to use for the matching.
-    camera : cl.CameraInfo
-        Camera information. Used to calculate arcsec per pixel.
-
-    Returns
-    -------
-    Match
-        Best match found by the astrometry library.
-
-    Raises
-    ------
-    ValueError
-        If no solution is found.
-    """
-    print("Finding coordinates")
-    solver = astrometry.Solver(
-        astrometry.series_4100.index_files(
-            cache_directory=cl.Paths.data / "astrometry_cache",
-        )
-    )
-    # TODO: Use camera info to set size_hint
-    solution = solver.solve(
-        stars=[(star.x, star.y) for star in stars],
-        size_hint=astrometry.SizeHint(
-            lower_arcsec_per_pixel=40,
-            upper_arcsec_per_pixel=50,
+def refine_mask(img: cl.ImageNBit, star: cl.StarMasked) -> cl.StarMasked:
+    # Must be 2D for padding
+    assert img.ndim == 2, "Image must be 2D"
+    # (top, bottom), (left, right)
+    grow = ((2, 2), (2, 2))
+    # Reduce grow if at the edge
+    grow = (
+        (
+            min(grow[0][0], star.bbox[1]),
+            min(grow[0][1], img.shape[0] - star.bbox[1] - star.bbox[3]),
         ),
-        position_hint=None,
-        solution_parameters=astrometry.SolutionParameters(),
+        (
+            min(grow[1][0], star.bbox[0]),
+            min(grow[1][1], img.shape[1] - star.bbox[0] - star.bbox[2]),
+        ),
     )
 
-    if not solution.has_match():
-        raise ValueError("No solution found")
-    return solution.best_match()
+    # Dilate the mask
+    kernel = np.asarray([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+    mask_padded = np.pad(star.mask.astype(np.uint8), grow, mode="constant")
+    mask_dilated = cv2.dilate(mask_padded, kernel, iterations=2)
+    mask_dilated = mask_dilated.astype(bool)
 
+    # Apply the mask
+    img_star = img[
+        star.bbox[1] - grow[0][0] : star.bbox[1] + star.bbox[3] + grow[0][1],
+        star.bbox[0] - grow[1][0] : star.bbox[0] + star.bbox[2] + grow[1][1],
+    ].copy()
 
-def find_star_magnitudes(img: cl.ImageNBit) -> list[cl.StarMag]:
-    pass
+    # Get new mask by clustering
+    kmeans = KMeans(n_clusters=2, random_state=0).fit(
+        img_star[mask_dilated].reshape(-1, 1)
+    )
+    pred = kmeans.predict(img_star.reshape(-1, 1)).reshape(img_star.shape)
+    right_cluster = np.argmax(kmeans.cluster_centers_)
+    new_mask = pred == right_cluster
+
+    # Find new bounding box
+    new_bbox = cv2.boundingRect(new_mask.astype(np.uint8))
+    # Cut the mask
+    new_mask = new_mask[
+        new_bbox[1] : new_bbox[1] + new_bbox[3],
+        new_bbox[0] : new_bbox[0] + new_bbox[2],
+    ]
+    new_bbox = (
+        star.bbox[0] - grow[1][0] + new_bbox[0],
+        star.bbox[1] - grow[0][0] + new_bbox[1],
+        new_bbox[2],
+        new_bbox[3],
+    )
+    new_star = cl.StarMasked(x=star.x, y=star.y, mask=new_mask, bbox=new_bbox)
+    return new_star

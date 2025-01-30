@@ -116,8 +116,8 @@ def preprocess(
     img = cl.replace_defects(img, mask_hot | mask_dead)
 
     # Normalize and interpolate
-    img -= img.min()
-    img /= img.max()
+    img -= np.nanmin(img)
+    img /= np.nanmax(img)
     img = img.green_interpolated()
 
     # Correct skyglow
